@@ -1,3 +1,4 @@
+(* Top-level command for 'value_definition' - similar to 'definition' but doesn't support attributes or thm names *)
 theory ValueDefinition
   imports Main ValueParser
   keywords "value_definition" :: thy_decl
@@ -10,7 +11,7 @@ fun gen_def binding raw_ty raw_tm int lthy =
   let
     val timing = Timing.start ()
     val ty = Syntax.read_typ lthy raw_ty
-    val tm = read_term lthy ty raw_tm
+    val tm = ValueParser.read_term lthy ty raw_tm
     val tm_with_eq = Const (@{const_name Pure.eq}, ty --> ty --> @{typ prop}) $ Free (Binding.name_of binding, ty) $ tm
     fun get_pos _ = []
     val _ = @{print tracing} "Parsing & type checking"

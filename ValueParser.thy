@@ -23,8 +23,11 @@ begin
 
 ML {*
 
-(* Based on Isabelle SIMPLE_SYNTAX: https://github.com/seL4/isabelle/blob/master/COPYRIGHT *)
-
+(* The scanner and parser here are based on Isabelle SIMPLE_SYNTAX:
+    https://github.com/seL4/isabelle/blob/master/src/Pure/Syntax/simple_syntax.ML
+  The scanner is more or less a direct copy, while the parser is loosely based on the original parser.
+ *)
+structure ValueParser = struct
 local
 
 val lexicon = Scan.make_lexicon
@@ -65,7 +68,7 @@ fun id_or_const ctxt expectT =
     | fix_const (t,_) = (t, []) 
   fun lookup i =
     fix_const (Consts.check_const (Context.Proof ctxt) (Proof_Context.consts_of ctxt) (i,[]))
-    handle ERROR _ => (Free (i, expectT), [])
+    handle ERROR _ => (Free (i, expectT ()), [])
  in
   const >> lookup
  end
@@ -111,7 +114,7 @@ fun term ctxt =
         Scan.repeat1 term5 >> curry Term.list_comb hd ||
         Scan.succeed hd)) x
   and term5 x =
-   (id_or_const ctxt (tvar_dummy ()) >> fst ||
+   (id_or_const ctxt tvar_dummy >> fst ||
     num >> mk_num ||
     str >> mk_string ||
     parse_parens ||
@@ -141,48 +144,91 @@ fun read_tm ctxt s =
 in
 
 (* Try to do a trivial type elaboration on the parsed term, given that we know the expected type *)
-fun cheap_elaborate_term ty tm =
+(* When this works, it's much faster than full-on type inference *)
+fun cheap_elaborate_term expectT tm =
  let
+  (* Destruct function into domain and range *)
+  (* If it's not recognised as a function assume '_' *)
   fun dest_funT (Type ("fun", [t, u])) = (t, u)
     | dest_funT t = (dummyT, t)
 
+  (* Get result type of function type after applying to n arguments *)
   fun dest_funT_nth_range t 0 = t
     | dest_funT_nth_range (Type ("fun", [_, u])) ix = dest_funT_nth_range u (ix - 1)
     | dest_funT_nth_range _ _ = dummyT
 
-  fun instantiate_return_ty ty num_apps t =
-    let val res_t = dest_funT_nth_range t num_apps
-        val match_t = Type.raw_unify (res_t, ty) Vartab.empty
-    in Envir.subst_type match_t t end
+  (* We want a value of type 'expectT', and we have a function of type 'funT' that we've applied
+     'num_apps' times.
+     Unify the result type of applying 'funT' with the expected type 'expectT', then apply that
+     unification to the rest of 'funT'. *)
+  fun instantiate_return_ty expectT num_apps funT =
+    let val res_t = dest_funT_nth_range funT num_apps
+        val match_t = Type.raw_unify (res_t, expectT) Vartab.empty
+    in Envir.subst_type match_t funT end
 
+ (* If we've finished with our simple instantiation and there are some type variables left over,
+    we want to replace them with dummyT '_' so that real type checking can solve them.
+    Otherwise, type checking would fall over on the type variable. *)
  fun strip_tvars (Type (t,ts)) = Type (t, map strip_tvars ts)
    | strip_tvars (TFree s)     = TFree s
    | strip_tvars (TVar _)      = dummyT
 
-  fun go_hd ty num_apps tm =
+  (* Recurse over the term, tracking the expected return type.
+     We count the number of applications so that we know how many function arrows to unpeel when we
+     hit a Const with a function type. *)
+  fun go_hd expectT num_apps tm =
     case tm of
       Const (c,t) =>
-       if ty = dummyT
+       if expectT = dummyT
        then (Const (c, strip_tvars t), t)
-       else let val t' = instantiate_return_ty ty num_apps t 
+       else let val t' = instantiate_return_ty expectT num_apps t
             in (Const (c, strip_tvars t'), t') end
     | a $ b =>
-       let val (a',t') = go_hd ty (num_apps + 1) a
+       let val (a',t') = go_hd expectT (num_apps + 1) a
            val (tI,tO) = dest_funT t'
            val (b',_)  = go_hd tI 0 b
        in (a' $ b', tO) end
-    | Free (v,t_orig) => if num_apps = 0 then (Free (v, strip_tvars ty), ty) else (Free (v, strip_tvars t_orig), ty)
-    | Var  (v,t_orig) => if num_apps = 0 then (Var  (v, strip_tvars ty), ty) else (Var  (v, strip_tvars t_orig), ty)
-    | Bound _ => (tm, ty)
-    | Abs _ => (tm, ty)
+    | Free (v,t_orig) => if num_apps = 0
+                         then (Free (v, strip_tvars expectT), expectT)
+                         else (Free (v, strip_tvars  t_orig), expectT)
+    | Var  (v,t_orig) => if num_apps = 0
+                         then (Var  (v, strip_tvars expectT), expectT)
+                         else (Var  (v, strip_tvars  t_orig), expectT)
+    | Bound _ => (tm, expectT)
+    | Abs   _ => (tm, expectT)
 
-  val res = go_hd ty 0 tm
+  val res = go_hd expectT 0 tm
  in
   fst res
  end
 
-fun read_term ctxt t =  Syntax.check_term ctxt o cheap_elaborate_term t o read_tm ctxt
+(* Parse and type check term *)
+fun read_term ctxt t str =
+ let
+  val timing = Timing.start ()
+  (* Parse *)
+  val tm = read_tm ctxt str
+  val _ = @{print tracing} "read_tm"
+  val _ = @{print tracing} (Timing.result timing)
+  val timing = Timing.start ()
+  (* Try to elaborate the term with type annotations *)
+  val tm = cheap_elaborate_term t tm
+  val _ = @{print tracing} "cheap_elaborate_term"
+  val _ = @{print tracing} (Timing.result timing)
+  val timing = Timing.start ()
+  (* Check whether the elaboration worked, or if there are still unknown types around.
+     If it didn't finish, we need to fall back to full type checking.
+     Really, elaboration could return a boolean saying whether it finished, but this is cheap enough. *)
+  val tm = Term.map_types Term.no_dummyT tm
+      handle TYPE _ =>
+        (@{print warning} "Warning: could not fully infer type of value expression; falling back to type checking";
+         @{print warning} tm;
+         Syntax.check_term ctxt tm)
+  val _ = @{print tracing} "check_term"
+  val _ = @{print tracing} (Timing.result timing)
+ in tm end
 
+end
 end
 *}
 

@@ -20,17 +20,21 @@ value_definition a_big_list :: "int list" where
 "[1, 2, 3, 4, 5]"
 ```
 
-## Shit benchmarks
+## Example times
 
 ```
-(* 1.23s *)
-value_definition foo2 :: "(int\<times>int) list" where
+(* 1.0s *)
+value_definition tuples_val :: "(int \<times> int) list" where
   "[(1, 1), (2, 2), (3, 3), (4, 4), (5, 5), <snip...> (995, 995), (996, 996), (997, 997), (998, 998), (999, 999), (1000, 1000)]"
 
 (* 10s *)
-definition foo :: "(int\<times>int) list" where
-  "foo = [(1, 1), (2, 2), (3, 3), (4, 4), (5, 5), <snip...> (995, 995), (996, 996), (997, 997), (998, 998), (999, 999), (1000, 1000)]"
+definition tuples :: "(int \<times> int) list" where
+  "tuples = [(1, 1), (2, 2), (3, 3), (4, 4), (5, 5), <snip...> (995, 995), (996, 996), (997, 997), (998, 998), (999, 999), (1000, 1000)]"
 ```
 
-See ValueParser_Test.thy for details.
+For this example, `tuples_val` spends about ninety percent of its time inserting the definition into the local theory.
+I'm not sure whether this can be improved.
+
+See ValueParser_Test.thy for details. Not all examples have such a dramatic improvement; on more
+realistic examples `value_definition` seems to be roughly twice the speed of `definition`.
 
