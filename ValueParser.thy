@@ -31,7 +31,7 @@ structure ValueParser = struct
 local
 
 val lexicon = Scan.make_lexicon
-  (map Symbol.explode ["(", ")", "[", "]", ","]);
+  (map Symbol.explode ["(", ")", "[", "]", ",", "CHR"]);
 
 fun read scan s =
   (case
@@ -55,7 +55,10 @@ fun kind k =
 
 val ident = kind Lexicon.Ident;
 val long_ident = kind Lexicon.Long_Ident;
+(*
 val num = kind Lexicon.Num :|-- (fn str => case Lexicon.read_int str of SOME i => Scan.succeed i | NONE => raise ERROR ("Lexer failure: token identified as number, but parse failed. Token: " ^ str));
+*)
+val num = kind Lexicon.Num :|-- (fn str =>  Scan.succeed (#value (Lexicon.read_num str)));
 val str = kind Lexicon.Str;
 
 val const = long_ident || ident;
@@ -117,6 +120,7 @@ fun term ctxt =
    (id_or_const ctxt tvar_dummy >> fst ||
     num >> mk_num ||
     str >> mk_string ||
+    $$ "CHR" |-- num >> HOLogic.mk_char ||
     parse_parens ||
     parse_list
    ) x

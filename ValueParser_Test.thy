@@ -77,6 +77,9 @@ ML {*
 assert_read_term @{typ "char list"} "char list" "''xyz''"
 *}
 
+ML {*
+assert_read_term @{typ "char list"} "char list" "[CHR 0x4c,CHR 0x69,CHR 0x73,CHR 0x74,CHR 0x27]"
+*}
 
 ML {*
 assert_read_term @{typ "(int \<times> nat) option list"} "(int \<times> nat) option list" "[Some (0,0), Some (1,2), None, Some (5,7), None]"
